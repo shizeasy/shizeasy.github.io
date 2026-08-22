@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebADB Shizuku Starter</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 600px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f4f4f9;
+            color: #333;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        button {
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #1d4ed8;
+        }
+        button:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+        }
+        pre {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            min-height: 100px;
+            max-height: 300px;
+        }
+        .status {
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h2>WebADB Shizuku Launcher</h2>
+        <p class="status">Status: <span id="statusText">Disconnected</span></p>
+        
+        <div>
+            <button id="connectBtn">Connect Phone</button>
+            <button id="startBtn" disabled>Start Shizuku</button>
+        </div>
+
+        <h3>Logs:</h3>
+        <pre id="logOutput">Click "Connect Phone" to begin...</pre>
+    </div>
+
+    <!-- Import ya-webadb and dependent libraries from CDN -->
+    <script src="https://unpkg.com/structjs@latest/dist/struct.min.js"></script>
+    <script src="https://unpkg.com/ya-webadb@latest/dist/ya-webadb.min.js"></script>
+
+    <script>
+        let device = null;
+        let adb = null;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const startBtn = document.getElementById('startBtn');
+        const statusText = document.getElementById('statusText');
+        const logOutput = document.getElementById('logOutput');
+
+        function log(message) {
+            logOutput.textContent += `\n${message}`;
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                log('Requesting USB device...');
+                // Request access to the Android device via WebUSB
+                const usbDevice = await navigator.usb.requestDevice({
+                    filters: []
+                });
+
+                log(`Connecting to ${usbDevice.productName || 'Android Device'}...`);
+                
+                // Initialize WebADB transport over WebUSB
+                const transport = await Adb.WebUsbTransport.open(usbDevice);
+                adb = await Adb.open(transport);
+
+                // Get device serial/properties to confirm connection
+                const serial = await adb.getProperties();
+                statusText.textContent = 'Connected';
+                statusText.style.color = 'green';
+                connectBtn.textContent = 'Re-connect';
+                startBtn.disabled = false;
+                
+                log('Successfully connected via WebADB!');
+            } catch (error) {
+                console.error(error);
+                log(`Error: ${error.message}`);
+                statusText.textContent = 'Connection Failed';
+                statusText.style.color = 'red';
+            }
+        });
+
+        startBtn.addEventListener('click', async () => {
+            if (!adb) {
+                log('Error: No active ADB connection.');
+                return;
+            }
+
+            const command = 'sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh';
+            log(`Running command: ${command}`);
+
+            try {
+                // Execute the shell command on the device
+                const output = await adb.shell(command);
+                log(`Command output:\n${output}`);
+            } catch (error) {
+                console.error(error);
+                log(`Execution Error: ${error.message}`);
+            }
+        });
+    </script>
+</body>
+</html>
