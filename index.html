@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebADB Shizuku Starter</title>
+    <title>ShizEasy</title>
     <style>
         body {
             font-family: system-ui, -apple-system, sans-serif;
@@ -55,7 +55,7 @@
 <body>
 
     <div class="card">
-        <h2>WebADB Shizuku Launcher</h2>
+        <h2>ShizEasy</h2>
         <p class="status">Status: <span id="statusText">Disconnected</span></p>
         
         <div>
@@ -67,12 +67,10 @@
         <pre id="logOutput">Click "Connect Phone" to begin...</pre>
     </div>
 
-    <!-- Import ya-webadb and dependent libraries from CDN -->
-    <script src="https://unpkg.com/structjs@latest/dist/struct.min.js"></script>
-    <script src="https://unpkg.com/ya-webadb@latest/dist/ya-webadb.min.js"></script>
+    <!-- Load bundle containing all required modules -->
+    <script src="https://cdn.jsdelivr.net/npm/@yume-chan/adb-all-in-one/browser/index.js"></script>
 
     <script>
-        let device = null;
         let adb = null;
 
         const connectBtn = document.getElementById('connectBtn');
@@ -88,19 +86,17 @@
         connectBtn.addEventListener('click', async () => {
             try {
                 log('Requesting USB device...');
-                // Request access to the Android device via WebUSB
-                const usbDevice = await navigator.usb.requestDevice({
-                    filters: []
-                });
-
-                log(`Connecting to ${usbDevice.productName || 'Android Device'}...`);
                 
-                // Initialize WebADB transport over WebUSB
-                const transport = await Adb.WebUsbTransport.open(usbDevice);
-                adb = await Adb.open(transport);
+                // Use the all-in-one package helper to request and connect via WebUSB
+                const transport = await window.AdbWebUsbBackend.requestDevice();
+                if (!transport) {
+                    log('No device selected.');
+                    return;
+                }
 
-                // Get device serial/properties to confirm connection
-                const serial = await adb.getProperties();
+                log('Initializing ADB session...');
+                adb = await window.Adb.authenticate(transport);
+
                 statusText.textContent = 'Connected';
                 statusText.style.color = 'green';
                 connectBtn.textContent = 'Re-connect';
@@ -125,9 +121,18 @@
             log(`Running command: ${command}`);
 
             try {
-                // Execute the shell command on the device
-                const output = await adb.shell(command);
-                log(`Command output:\n${output}`);
+                // Execute command and read output stream
+                const process = await adb.subprocess.spawn(command);
+                const reader = process.stdout.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    log(decoder.decode(value));
+                }
+
+                log('Command execution finished.');
             } catch (error) {
                 console.error(error);
                 log(`Execution Error: ${error.message}`);
