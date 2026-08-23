@@ -113,64 +113,79 @@
     window.addEventListener('error', (e) => log(`[GLOBAL ERROR]: ${e.message}`));
     window.addEventListener('unhandledrejection', (e) => log(`[UNHANDLED REJECTION]: ${e.reason?.message || e.reason}`));
 
-    let Adb, AdbDaemonWebUsbDeviceManager, AdbWebCredentialStore, DecodeUtf8Stream;
+    let Adb, DeviceManager, AdbWebCredentialStore, StreamDecoder;
     let adbDevice = null;
 
-    // Unpacks ESM named or default exports robustly
-    function resolveExport(mod, name) {
-        if (!mod) return undefined;
-        if (mod[name]) return mod[name];
-        if (mod.default && mod.default[name]) return mod.default[name];
-        if (mod.default && typeof mod.default === 'function') return mod.default;
-        return undefined;
+    // Helper to find export across named, default, or versioned variants
+    function findExport(mod, ...possibleNames) {
+        if (!mod) return null;
+        const targets = [mod, mod.default].filter(Boolean);
+        
+        for (const target of targets) {
+            for (const name of possibleNames) {
+                if (target[name]) return target[name];
+            }
+        }
+        
+        // Fallback key inspection
+        for (const target of targets) {
+            for (const key of Object.keys(target)) {
+                for (const name of possibleNames) {
+                    if (key.toLowerCase() === name.toLowerCase()) {
+                        return target[key];
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     async function init() {
         try {
-            log('Loading WebADB standalone modules...', true);
+            log('Loading pinned WebADB v0.0.22 modules...', true);
             
             const [adbMod, webusbMod, credMod, streamMod] = await Promise.all([
-                import('https://esm.sh/@yume-chan/adb?bundle'),
-                import('https://esm.sh/@yume-chan/adb-backend-webusb?bundle'),
-                import('https://esm.sh/@yume-chan/adb-credential-web?bundle'),
-                import('https://esm.sh/@yume-chan/stream-extra?bundle')
+                import('https://esm.sh/@yume-chan/adb@0.0.22?bundle'),
+                import('https://esm.sh/@yume-chan/adb-backend-webusb@0.0.22?bundle'),
+                import('https://esm.sh/@yume-chan/adb-credential-web@0.0.22?bundle'),
+                import('https://esm.sh/@yume-chan/stream-extra@0.0.22?bundle').catch(() => null)
             ]);
 
-            Adb = resolveExport(adbMod, 'Adb');
-            AdbDaemonWebUsbDeviceManager = resolveExport(webusbMod, 'AdbDaemonWebUsbDeviceManager');
-            AdbWebCredentialStore = resolveExport(credMod, 'AdbWebCredentialStore');
-            DecodeUtf8Stream = resolveExport(streamMod, 'DecodeUtf8Stream');
+            Adb = findExport(adbMod, 'Adb');
+            DeviceManager = findExport(webusbMod, 'AdbDaemonWebUsbDeviceManager', 'AdbWebUsbBackendManager', 'AdbWebUsbBackend');
+            AdbWebCredentialStore = findExport(credMod, 'AdbWebCredentialStore');
+            
+            // Prefer native browser TextDecoderStream, fallback to package stream
+            StreamDecoder = window.TextDecoderStream || findExport(streamMod, 'DecodeUtf8Stream', 'TextDecoderStream');
 
-            // Explicit verification step
             const missing = [];
             if (!Adb) missing.push('Adb');
-            if (!AdbDaemonWebUsbDeviceManager) missing.push('AdbDaemonWebUsbDeviceManager');
+            if (!DeviceManager) missing.push('DeviceManager');
             if (!AdbWebCredentialStore) missing.push('AdbWebCredentialStore');
-            if (!DecodeUtf8Stream) missing.push('DecodeUtf8Stream');
 
             if (missing.length > 0) {
-                throw new Error(`Failed to extract properties: ${missing.join(', ')}`);
+                throw new Error(`Missing components: ${missing.join(', ')}`);
             }
 
             log('Modules loaded successfully!\nClick "Connect Phone" to begin.', true);
         } catch (err) {
-            log(`[LOAD FAILED]: ${err.stack || err.message || err}`, true);
+            log(`[LOAD FAILED]: ${err.message}`, true);
         }
     }
 
     init();
 
     connectBtn.addEventListener('click', async () => {
-        if (!AdbDaemonWebUsbDeviceManager) {
-            log('[ERROR] WebADB modules failed to initialize properly.');
+        if (!DeviceManager) {
+            log('[ERROR] WebADB modules failed to initialize.');
             return;
         }
 
         try {
             log('Requesting WebUSB device pairing...', true);
-            const Manager = AdbDaemonWebUsbDeviceManager.BROWSER;
+            const Manager = DeviceManager.BROWSER || DeviceManager;
             
-            if (!Manager) {
+            if (!Manager || typeof Manager.requestDevice !== 'function') {
                 log('[ERROR] WebUSB unavailable. Ensure you are using Chrome/Brave/Edge on HTTPS.');
                 return;
             }
@@ -185,7 +200,7 @@
             const connection = await device.connect();
             const credentialStore = new AdbWebCredentialStore('shizeasy');
             
-            log('Prompt sent. Check your phone screen and tap "Always allow from this computer"...');
+            log('Check phone screen and tap "Always allow from this computer"...');
             adbDevice = await Adb.authenticate(connection, credentialStore, undefined);
             
             statusText.textContent = 'Connected';
@@ -211,17 +226,26 @@
             
             const subprocess = await adbDevice.subprocess.spawn('sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh');
             
-            subprocess.stdout
-                .pipeThrough(new DecodeUtf8Stream())
-                .pipeTo(new WritableStream({
+            if (StreamDecoder) {
+                subprocess.stdout.pipeThrough(new StreamDecoder()).pipeTo(new WritableStream({
                     write(chunk) { log(chunk); }
                 }));
 
-            subprocess.stderr
-                .pipeThrough(new DecodeUtf8Stream())
-                .pipeTo(new WritableStream({
+                subprocess.stderr.pipeThrough(new StreamDecoder()).pipeTo(new WritableStream({
                     write(chunk) { log(`[ERROR]: ${chunk}`); }
                 }));
+            } else {
+                // Fallback byte decoder
+                const decoder = new TextDecoder();
+                const reader = subprocess.stdout.getReader();
+                (async () => {
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        log(decoder.decode(value));
+                    }
+                })();
+            }
 
             await subprocess.exit;
             log('\nExecution finished.');
