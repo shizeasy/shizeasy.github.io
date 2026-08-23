@@ -6,138 +6,208 @@
     <title>ShizEasy</title>
     <style>
         body {
-            font-family: system-ui, -apple-system, sans-serif;
-            max-width: 600px;
-            margin: 40px auto;
-            padding: 20px;
-            background-color: #f4f4f9;
-            color: #333;
+            background-color: #f3f4f8;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            margin: 0;
+            padding-top: 40px;
         }
-        .card {
-            background: white;
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        .container {
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            padding: 24px;
+            width: 100%;
+            max-width: 480px;
         }
-        button {
-            background-color: #2563eb;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            font-size: 16px;
-            border-radius: 6px;
-            cursor: pointer;
-            margin-right: 10px;
-            margin-bottom: 10px;
-        }
-        button:hover {
-            background-color: #1d4ed8;
-        }
-        button:disabled {
-            background-color: #9ca3af;
-            cursor: not-allowed;
-        }
-        pre {
-            background: #1e293b;
-            color: #e2e8f0;
-            padding: 15px;
-            border-radius: 6px;
-            overflow-x: auto;
-            min-height: 100px;
-            max-height: 300px;
+        h1 {
+            font-size: 24px;
+            margin: 0 0 16px 0;
+            color: #1a1a2e;
         }
         .status {
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #2d3748;
+        }
+        #statusText {
+            font-weight: normal;
+        }
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        button {
+            border: none;
+            border-radius: 6px;
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        button:active {
+            transform: scale(0.98);
+        }
+        #connectBtn {
+            background-color: #5a26ed;
+            color: white;
+        }
+        #startBtn {
+            background-color: #9ca3af;
+            color: white;
+            cursor: not-allowed;
+        }
+        #startBtn.enabled {
+            background-color: #8b949e;
+            cursor: pointer;
+        }
+        .logs-title {
             font-weight: bold;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
+            color: #1a1a2e;
+        }
+        .terminal {
+            background-color: #1e2235;
+            color: #e2e8f0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 13px;
+            padding: 16px;
+            border-radius: 6px;
+            min-height: 120px;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
     </style>
 </head>
 <body>
 
-    <div class="card">
-        <h2>ShizEasy</h2>
-        <p class="status">Status: <span id="statusText">Disconnected</span></p>
-        
-        <div>
-            <button id="connectBtn">Connect Phone</button>
-            <button id="startBtn" disabled>Start Shizuku</button>
-        </div>
-
-        <h3>Logs:</h3>
-        <pre id="logOutput">Click "Connect Phone" to begin...</pre>
+<div class="container">
+    <h1>ShizEasy</h1>
+    
+    <div class="status">
+        Status: <span id="statusText">Disconnected</span>
     </div>
 
-    <!-- Load bundle containing all required modules -->
-    <script src="https://cdn.jsdelivr.net/npm/@yume-chan/adb-all-in-one/browser/index.js"></script>
+    <div class="controls">
+        <button id="connectBtn">Connect Phone</button>
+        <button id="startBtn" disabled>Start Shizuku</button>
+    </div>
 
-    <script>
-        let adb = null;
+    <div class="logs-title">Logs:</div>
+    <div class="terminal" id="terminal">Click "Connect Phone" to begin...</div>
+</div>
 
-        const connectBtn = document.getElementById('connectBtn');
-        const startBtn = document.getElementById('startBtn');
-        const statusText = document.getElementById('statusText');
-        const logOutput = document.getElementById('logOutput');
+<script type="module">
+    // Using modern @yume-chan/adb (WebADB) stack via ESM
+    import { Adb } from 'https://cdn.jsdelivr.net/npm/@yume-chan/adb/+esm';
+    import { AdbDaemonWebUsbDeviceManager } from 'https://cdn.jsdelivr.net/npm/@yume-chan/adb-backend-webusb/+esm';
+    import { Consumable, DecodeUtf8Stream } from 'https://cdn.jsdelivr.net/npm/@yume-chan/stream-extra/+esm';
 
-        function log(message) {
-            logOutput.textContent += `\n${message}`;
-            logOutput.scrollTop = logOutput.scrollHeight;
-        }
+    const connectBtn = document.getElementById('connectBtn');
+    const startBtn = document.getElementById('startBtn');
+    const statusText = document.getElementById('statusText');
+    const terminal = document.getElementById('terminal');
 
-        connectBtn.addEventListener('click', async () => {
-            try {
-                log('Requesting USB device...');
-                
-                // Use the all-in-one package helper to request and connect via WebUSB
-                const transport = await window.AdbWebUsbBackend.requestDevice();
-                if (!transport) {
-                    log('No device selected.');
-                    return;
-                }
+    let adbDevice = null;
 
-                log('Initializing ADB session...');
-                adb = await window.Adb.authenticate(transport);
+    function log(message, clear = false) {
+        if (clear) terminal.textContent = '';
+        terminal.textContent += (terminal.textContent === '' ? '' : '\n') + message;
+        terminal.scrollTop = terminal.scrollHeight;
+    }
 
-                statusText.textContent = 'Connected';
-                statusText.style.color = 'green';
-                connectBtn.textContent = 'Re-connect';
-                startBtn.disabled = false;
-                
-                log('Successfully connected via WebADB!');
-            } catch (error) {
-                console.error(error);
-                log(`Error: ${error.message}`);
-                statusText.textContent = 'Connection Failed';
-                statusText.style.color = 'red';
+    connectBtn.addEventListener('click', async () => {
+        try {
+            log('Requesting WebUSB device pairing...', true);
+            const Manager = AdbDaemonWebUsbDeviceManager.BROWSER;
+            
+            if (!Manager) {
+                throw new Error("WebUSB is not supported in this browser.");
             }
-        });
 
-        startBtn.addEventListener('click', async () => {
-            if (!adb) {
-                log('Error: No active ADB connection.');
+            const device = await Manager.requestDevice();
+            if (!device) {
+                log('No device selected.');
                 return;
             }
 
-            const command = 'sh /storage/emulated/0/Android/data/moe.shizuku.privileged.api/start.sh';
-            log(`Running command: ${command}`);
-
-            try {
-                // Execute command and read output stream
-                const process = await adb.subprocess.spawn(command);
-                const reader = process.stdout.getReader();
-                const decoder = new TextDecoder();
-
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    log(decoder.decode(value));
+            log(`Connecting to ${device.name}...`);
+            const connection = await device.connect();
+            
+            // Generate or retrieve RSA keys for ADB authentication
+            const credentialStore = {
+                async *iterateKeys() {
+                    // In a production app, persist this key to IndexedDB or localStorage
+                    const key = await crypto.subtle.generateKey(
+                        { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([0x01, 0x00, 0x01]), hash: 'SHA-256' },
+                        true,
+                        ['sign', 'verify']
+                    );
+                    yield key;
                 }
+            };
 
-                log('Command execution finished.');
-            } catch (error) {
-                console.error(error);
-                log(`Execution Error: ${error.message}`);
-            }
-        });
-    </script>
+            adbDevice = await Adb.authenticate(connection, credentialStore, undefined);
+            
+            statusText.textContent = 'Connected';
+            statusText.style.color = '#10b981';
+            connectBtn.style.display = 'none';
+            
+            startBtn.disabled = false;
+            startBtn.classList.add('enabled');
+            
+            log('Successfully connected to device via WebADB.');
+            log('Ready to inject Shizuku.');
+
+        } catch (error) {
+            log(`Connection failed: ${error.message}`);
+            console.error(error);
+        }
+    });
+
+    startBtn.addEventListener('click', async () => {
+        if (!adbDevice) return;
+
+        try {
+            log('\nExecuting Shizuku launch script...');
+            startBtn.disabled = true;
+            
+            // Execute the specific Shizuku command requested
+            const subprocess = await adbDevice.subprocess.spawn('sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh');
+            
+            // Handle output streaming
+            subprocess.stdout
+                .pipeThrough(new DecodeUtf8Stream())
+                .pipeTo(new WritableStream({
+                    write(chunk) {
+                        log(chunk);
+                    }
+                }));
+
+            subprocess.stderr
+                .pipeThrough(new DecodeUtf8Stream())
+                .pipeTo(new WritableStream({
+                    write(chunk) {
+                        log(`[ERROR]: ${chunk}`);
+                    }
+                }));
+
+            await subprocess.exit;
+            log('\nScript execution completed.');
+
+        } catch (error) {
+            log(`Execution failed: ${error.message}`);
+        } finally {
+            startBtn.disabled = false;
+        }
+    });
+</script>
 </body>
 </html>
