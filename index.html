@@ -74,7 +74,7 @@
         .terminal {
             background-color: #1e2235;
             color: #e2e8f0;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
             font-size: 13px;
             padding: 16px;
             border-radius: 6px;
@@ -104,11 +104,23 @@
     <div class="terminal" id="terminal">Click "Connect Phone" to begin...</div>
 </div>
 
+<!-- Import map to resolve dependencies for the modern WebADB packages -->
+<script type="importmap">
+{
+  "imports": {
+    "@yume-chan/adb": "https://esm.sh/@yume-chan/adb@0.0.22",
+    "@yume-chan/adb-backend-webusb": "https://esm.sh/@yume-chan/adb-backend-webusb@0.0.22",
+    "@yume-chan/adb-credential-web": "https://esm.sh/@yume-chan/adb-credential-web@0.0.22",
+    "@yume-chan/stream-extra": "https://esm.sh/@yume-chan/stream-extra@0.0.22"
+  }
+}
+</script>
+
 <script type="module">
-    // Using modern @yume-chan/adb (WebADB) stack via ESM
-    import { Adb } from 'https://cdn.jsdelivr.net/npm/@yume-chan/adb/+esm';
-    import { AdbDaemonWebUsbDeviceManager } from 'https://cdn.jsdelivr.net/npm/@yume-chan/adb-backend-webusb/+esm';
-    import { Consumable, DecodeUtf8Stream } from 'https://cdn.jsdelivr.net/npm/@yume-chan/stream-extra/+esm';
+    import { Adb } from '@yume-chan/adb';
+    import { AdbDaemonWebUsbDeviceManager } from '@yume-chan/adb-backend-webusb';
+    import { AdbWebCredentialStore } from '@yume-chan/adb-credential-web';
+    import { DecodeUtf8Stream } from '@yume-chan/stream-extra';
 
     const connectBtn = document.getElementById('connectBtn');
     const startBtn = document.getElementById('startBtn');
@@ -129,7 +141,8 @@
             const Manager = AdbDaemonWebUsbDeviceManager.BROWSER;
             
             if (!Manager) {
-                throw new Error("WebUSB is not supported in this browser.");
+                log('[ERROR]: WebUSB is not supported in this browser. Try Chrome, Edge, or Opera.');
+                return;
             }
 
             const device = await Manager.requestDevice();
@@ -141,19 +154,10 @@
             log(`Connecting to ${device.name}...`);
             const connection = await device.connect();
             
-            // Generate or retrieve RSA keys for ADB authentication
-            const credentialStore = {
-                async *iterateKeys() {
-                    // In a production app, persist this key to IndexedDB or localStorage
-                    const key = await crypto.subtle.generateKey(
-                        { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([0x01, 0x00, 0x01]), hash: 'SHA-256' },
-                        true,
-                        ['sign', 'verify']
-                    );
-                    yield key;
-                }
-            };
-
+            // Use the official Web Credential Store to handle RSA key generation and saving
+            const credentialStore = new AdbWebCredentialStore('shizeasy');
+            
+            log('Waiting for authentication. Please check your phone and allow USB debugging if prompted...');
             adbDevice = await Adb.authenticate(connection, credentialStore, undefined);
             
             statusText.textContent = 'Connected';
@@ -163,7 +167,7 @@
             startBtn.disabled = false;
             startBtn.classList.add('enabled');
             
-            log('Successfully connected to device via WebADB.');
+            log('Successfully connected to device via WebADB!');
             log('Ready to inject Shizuku.');
 
         } catch (error) {
@@ -179,10 +183,8 @@
             log('\nExecuting Shizuku launch script...');
             startBtn.disabled = true;
             
-            // Execute the specific Shizuku command requested
             const subprocess = await adbDevice.subprocess.spawn('sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh');
             
-            // Handle output streaming
             subprocess.stdout
                 .pipeThrough(new DecodeUtf8Stream())
                 .pipeTo(new WritableStream({
