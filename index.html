@@ -95,7 +95,7 @@
     </div>
 
     <div class="logs-title">Logs:</div>
-    <div class="terminal" id="terminal">Loading WebADB modules...</div>
+    <div class="terminal" id="terminal">Initializing...</div>
 </div>
 
 <script type="module">
@@ -110,26 +110,33 @@
         terminal.scrollTop = terminal.scrollHeight;
     }
 
+    // Capture uncaught errors and print them straight to the UI terminal box
+    window.addEventListener('error', (e) => log(`[GLOBAL ERROR]: ${e.message}`));
+    window.addEventListener('unhandledrejection', (e) => log(`[UNHANDLED REJECTION]: ${e.reason?.message || e.reason}`));
+
     let Adb, AdbDaemonWebUsbDeviceManager, AdbWebCredentialStore, DecodeUtf8Stream;
     let adbDevice = null;
 
-    // Load via jsDelivr ESM endpoints (bypasses esm.sh 500 build errors)
     async function init() {
         try {
-            const adbMod = await import('https://cdn.jsdelivr.net/npm/@yume-chan/adb/+esm');
-            const webusbMod = await import('https://cdn.jsdelivr.net/npm/@yume-chan/adb-backend-webusb/+esm');
-            const credMod = await import('https://cdn.jsdelivr.net/npm/@yume-chan/adb-credential-web/+esm');
-            const streamMod = await import('https://cdn.jsdelivr.net/npm/@yume-chan/stream-extra/+esm');
+            log('Loading WebADB standalone modules...', true);
+            
+            // ESM bundle parameters force full dependency inlining
+            const [adbMod, webusbMod, credMod, streamMod] = await Promise.all([
+                import('https://esm.sh/@yume-chan/adb?bundle'),
+                import('https://esm.sh/@yume-chan/adb-backend-webusb?bundle'),
+                import('https://esm.sh/@yume-chan/adb-credential-web?bundle'),
+                import('https://esm.sh/@yume-chan/stream-extra?bundle')
+            ]);
 
             Adb = adbMod.Adb;
             AdbDaemonWebUsbDeviceManager = webusbMod.AdbDaemonWebUsbDeviceManager;
             AdbWebCredentialStore = credMod.AdbWebCredentialStore;
             DecodeUtf8Stream = streamMod.DecodeUtf8Stream;
 
-            log('Click "Connect Phone" to begin...', true);
+            log('Modules loaded successfully!\nClick "Connect Phone" to begin.', true);
         } catch (err) {
-            log(`[CRITICAL ERROR] Module load failed: ${err.message}`, true);
-            console.error(err);
+            log(`[LOAD FAILED]: ${err.stack || err.message || err}`, true);
         }
     }
 
@@ -137,7 +144,7 @@
 
     connectBtn.addEventListener('click', async () => {
         if (!AdbDaemonWebUsbDeviceManager) {
-            log('[ERROR] Modules failed to load. Check browser console.');
+            log('[ERROR] WebADB modules are not ready.');
             return;
         }
 
@@ -146,21 +153,21 @@
             const Manager = AdbDaemonWebUsbDeviceManager.BROWSER;
             
             if (!Manager) {
-                log('[ERROR] WebUSB is not supported in this browser. Use Chrome, Edge, or Brave.');
+                log('[ERROR] WebUSB unavailable. Ensure you are using Chrome/Brave/Edge on HTTPS or localhost.');
                 return;
             }
 
             const device = await Manager.requestDevice();
             if (!device) {
-                log('No device selected.');
+                log('Device selection canceled.');
                 return;
             }
 
-            log(`Connecting to device...`);
+            log(`Connecting to ${device.name || 'USB Device'}...`);
             const connection = await device.connect();
             const credentialStore = new AdbWebCredentialStore('shizeasy');
             
-            log('Check your phone screen and tap "Allow USB Debugging"...');
+            log('Prompt sent. Check your phone screen and tap "Always allow from this computer"...');
             adbDevice = await Adb.authenticate(connection, credentialStore, undefined);
             
             statusText.textContent = 'Connected';
@@ -170,11 +177,10 @@
             startBtn.disabled = false;
             startBtn.classList.add('enabled');
             
-            log('Connected! Ready to start Shizuku.');
+            log('Connected! Click "Start Shizuku" to run the script.');
 
         } catch (error) {
             log(`Connection failed: ${error.message}`);
-            console.error(error);
         }
     });
 
@@ -200,7 +206,7 @@
                 }));
 
             await subprocess.exit;
-            log('\nScript execution completed.');
+            log('\nExecution finished.');
 
         } catch (error) {
             log(`Execution failed: ${error.message}`);
