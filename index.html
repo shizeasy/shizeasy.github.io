@@ -85,6 +85,17 @@
             word-wrap: break-word;
         }
     </style>
+
+    <!-- Native Browser Import Map resolves internal module graph dynamically -->
+    <script type="importmap">
+    {
+      "imports": {
+        "@yume-chan/adb": "https://esm.sh/@yume-chan/adb?bundle",
+        "@yume-chan/adb-backend-webusb": "https://esm.sh/@yume-chan/adb-backend-webusb?bundle",
+        "@yume-chan/adb-credential-web": "https://esm.sh/@yume-chan/adb-credential-web?bundle"
+      }
+    }
+    </script>
 </head>
 <body>
 
@@ -104,11 +115,17 @@
     <div class="terminal" id="terminal">Click "Connect Phone" to begin...</div>
 </div>
 
-<script>
+<script type="module">
+    import { Adb } from '@yume-chan/adb';
+    import { AdbDaemonWebUsbDeviceManager } from '@yume-chan/adb-backend-webusb';
+    import { AdbWebCredentialStore } from '@yume-chan/adb-credential-web';
+
     const terminal = document.getElementById('terminal');
     const connectBtn = document.getElementById('connectBtn');
     const startBtn = document.getElementById('startBtn');
     const statusText = document.getElementById('statusText');
+
+    let adbDevice = null;
 
     function log(message, clear = false) {
         if (clear) terminal.textContent = '';
@@ -116,88 +133,34 @@
         terminal.scrollTop = terminal.scrollHeight;
     }
 
-    let adbDevice = null;
-    let modules = null;
-
-    function getExport(mod, name) {
-        if (!mod) return null;
-        if (mod[name]) return mod[name];
-        if (mod.default && mod.default[name]) return mod.default[name];
-        if (mod.default && typeof mod.default === 'function' && mod.default.name === name) return mod.default;
-        for (const key of Object.keys(mod)) {
-            if (key.toLowerCase() === name.toLowerCase()) return mod[key];
-        }
-        return null;
-    }
-
-    async function loadWebADB() {
-        if (modules) return modules;
-
-        log('Loading WebADB modules...', true);
-
-        const cdns = [
-            {
-                adb: 'https://cdn.jsdelivr.net/npm/@yume-chan/adb@0.0.22/+esm',
-                webusb: 'https://cdn.jsdelivr.net/npm/@yume-chan/adb-backend-webusb@0.0.22/+esm',
-                cred: 'https://cdn.jsdelivr.net/npm/@yume-chan/adb-credential-web@0.0.22/+esm'
-            },
-            {
-                adb: 'https://esm.sh/@yume-chan/adb@0.0.22',
-                webusb: 'https://esm.sh/@yume-chan/adb-backend-webusb@0.0.22',
-                cred: 'https://esm.sh/@yume-chan/adb-credential-web@0.0.22'
-            }
-        ];
-
-        let lastError = null;
-        for (const cdn of cdns) {
-            try {
-                const [adbMod, webusbMod, credMod] = await Promise.all([
-                    import(cdn.adb),
-                    import(cdn.webusb),
-                    import(cdn.cred)
-                ]);
-
-                const Adb = getExport(adbMod, 'Adb');
-                const ManagerClass = getExport(webusbMod, 'AdbDaemonWebUsbDeviceManager') || getExport(webusbMod, 'AdbWebUsbBackendManager');
-                const CredentialStore = getExport(credMod, 'AdbWebCredentialStore');
-
-                if (Adb && ManagerClass && CredentialStore) {
-                    modules = { Adb, ManagerClass, CredentialStore };
-                    return modules;
-                }
-            } catch (err) {
-                lastError = err;
-            }
-        }
-        throw new Error(`Failed to load WebADB libraries: ${lastError?.message || 'CDN unreachable'}`);
-    }
+    window.addEventListener('error', (e) => log(`[GLOBAL ERROR]: ${e.message}`));
+    window.addEventListener('unhandledrejection', (e) => log(`[UNHANDLED REJECTION]: ${e.reason?.message || e.reason}`));
 
     connectBtn.addEventListener('click', async () => {
         try {
             if (!navigator.usb) {
-                log('[ERROR] WebUSB is not supported in this browser. Use Chrome, Edge, or Brave on HTTPS or localhost.');
+                log('[ERROR] WebUSB is not supported in this browser. Use Chrome, Edge, or Brave over HTTPS.');
                 return;
             }
 
-            const { Adb, ManagerClass, CredentialStore } = await loadWebADB();
+            log('Requesting WebUSB pairing...', true);
+            const manager = AdbDaemonWebUsbDeviceManager.BROWSER;
+            
+            if (!manager) {
+                throw new Error('AdbDaemonWebUsbDeviceManager.BROWSER is unavailable.');
+            }
 
-            log('Requesting USB device...', true);
-
-            // Create device manager from WebUSB API instance
-            const manager = ManagerClass.BROWSER || new ManagerClass(navigator.usb);
-
-            // Request device via WebADB manager (automatically handles filters and returns AdbDaemonWebUsbDevice)
             const device = await manager.requestDevice();
             if (!device) {
                 log('Device selection canceled.');
                 return;
             }
 
-            log('Connecting to USB interface...');
+            log('Connecting to USB device...');
             const connection = await device.connect();
 
-            const credentialStore = new CredentialStore('shizeasy');
-            log('Waiting for authentication... Check your phone screen and tap "Allow USB debugging".');
+            const credentialStore = new AdbWebCredentialStore('shizeasy');
+            log('Waiting for authentication... Check your phone screen and tap "Always allow from this computer".');
 
             adbDevice = await Adb.authenticate(connection, credentialStore, undefined);
 
@@ -208,11 +171,10 @@
             startBtn.disabled = false;
             startBtn.classList.add('enabled');
 
-            log('Successfully connected to device!');
-            log('Click "Start Shizuku" to run the script.');
+            log('Connected successfully!\nClick "Start Shizuku" to run the script.');
 
         } catch (error) {
-            log(`[ERROR]: ${error.message}`);
+            log(`Connection failed: ${error.message}`);
             console.error(error);
         }
     });
