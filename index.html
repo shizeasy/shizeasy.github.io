@@ -33,9 +33,6 @@
             margin-bottom: 16px;
             color: #2d3748;
         }
-        #statusText {
-            font-weight: normal;
-        }
         .controls {
             display: flex;
             gap: 12px;
@@ -49,9 +46,6 @@
             font-weight: 500;
             cursor: pointer;
             transition: opacity 0.2s;
-        }
-        button:active {
-            transform: scale(0.98);
         }
         #connectBtn {
             background-color: #5a26ed;
@@ -101,33 +95,14 @@
     </div>
 
     <div class="logs-title">Logs:</div>
-    <div class="terminal" id="terminal">Click "Connect Phone" to begin...</div>
+    <div class="terminal" id="terminal">Loading WebADB modules...</div>
 </div>
 
-<!-- Import map to resolve dependencies for the modern WebADB packages -->
-<script type="importmap">
-{
-  "imports": {
-    "@yume-chan/adb": "https://esm.sh/@yume-chan/adb@0.0.22",
-    "@yume-chan/adb-backend-webusb": "https://esm.sh/@yume-chan/adb-backend-webusb@0.0.22",
-    "@yume-chan/adb-credential-web": "https://esm.sh/@yume-chan/adb-credential-web@0.0.22",
-    "@yume-chan/stream-extra": "https://esm.sh/@yume-chan/stream-extra@0.0.22"
-  }
-}
-</script>
-
 <script type="module">
-    import { Adb } from '@yume-chan/adb';
-    import { AdbDaemonWebUsbDeviceManager } from '@yume-chan/adb-backend-webusb';
-    import { AdbWebCredentialStore } from '@yume-chan/adb-credential-web';
-    import { DecodeUtf8Stream } from '@yume-chan/stream-extra';
-
     const connectBtn = document.getElementById('connectBtn');
     const startBtn = document.getElementById('startBtn');
     const statusText = document.getElementById('statusText');
     const terminal = document.getElementById('terminal');
-
-    let adbDevice = null;
 
     function log(message, clear = false) {
         if (clear) terminal.textContent = '';
@@ -135,13 +110,42 @@
         terminal.scrollTop = terminal.scrollHeight;
     }
 
+    let Adb, AdbDaemonWebUsbDeviceManager, AdbWebCredentialStore, DecodeUtf8Stream;
+    let adbDevice = null;
+
+    // Dynamic imports directly from esm.sh bundle resolution
+    async function init() {
+        try {
+            const adbMod = await import('https://esm.sh/@yume-chan/adb');
+            const webusbMod = await import('https://esm.sh/@yume-chan/adb-backend-webusb');
+            const credMod = await import('https://esm.sh/@yume-chan/adb-credential-web');
+            const streamMod = await import('https://esm.sh/@yume-chan/stream-extra');
+
+            Adb = adbMod.Adb;
+            AdbDaemonWebUsbDeviceManager = webusbMod.AdbDaemonWebUsbDeviceManager;
+            AdbWebCredentialStore = credMod.AdbWebCredentialStore;
+            DecodeUtf8Stream = streamMod.DecodeUtf8Stream;
+
+            log('Click "Connect Phone" to begin...', true);
+        } catch (err) {
+            log(`[CRITICAL ERROR] Script import failed: ${err.message}`, true);
+        }
+    }
+
+    init();
+
     connectBtn.addEventListener('click', async () => {
+        if (!AdbDaemonWebUsbDeviceManager) {
+            log('[ERROR] Modules are still loading or failed to fetch.');
+            return;
+        }
+
         try {
             log('Requesting WebUSB device pairing...', true);
             const Manager = AdbDaemonWebUsbDeviceManager.BROWSER;
             
             if (!Manager) {
-                log('[ERROR]: WebUSB is not supported in this browser. Try Chrome, Edge, or Opera.');
+                log('[ERROR] WebUSB not supported. Use Chrome, Edge, or Brave.');
                 return;
             }
 
@@ -151,13 +155,11 @@
                 return;
             }
 
-            log(`Connecting to ${device.name}...`);
+            log(`Connecting to ${device.name || 'Device'}...`);
             const connection = await device.connect();
-            
-            // Use the official Web Credential Store to handle RSA key generation and saving
             const credentialStore = new AdbWebCredentialStore('shizeasy');
             
-            log('Waiting for authentication. Please check your phone and allow USB debugging if prompted...');
+            log('Check phone screen and accept the USB Debugging prompt...');
             adbDevice = await Adb.authenticate(connection, credentialStore, undefined);
             
             statusText.textContent = 'Connected';
@@ -167,8 +169,7 @@
             startBtn.disabled = false;
             startBtn.classList.add('enabled');
             
-            log('Successfully connected to device via WebADB!');
-            log('Ready to inject Shizuku.');
+            log('Connected! Click "Start Shizuku" to run the script.');
 
         } catch (error) {
             log(`Connection failed: ${error.message}`);
@@ -180,7 +181,7 @@
         if (!adbDevice) return;
 
         try {
-            log('\nExecuting Shizuku launch script...');
+            log('\nRunning Shizuku command...');
             startBtn.disabled = true;
             
             const subprocess = await adbDevice.subprocess.spawn('sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh');
@@ -188,21 +189,17 @@
             subprocess.stdout
                 .pipeThrough(new DecodeUtf8Stream())
                 .pipeTo(new WritableStream({
-                    write(chunk) {
-                        log(chunk);
-                    }
+                    write(chunk) { log(chunk); }
                 }));
 
             subprocess.stderr
                 .pipeThrough(new DecodeUtf8Stream())
                 .pipeTo(new WritableStream({
-                    write(chunk) {
-                        log(`[ERROR]: ${chunk}`);
-                    }
+                    write(chunk) { log(`[ERROR]: ${chunk}`); }
                 }));
 
             await subprocess.exit;
-            log('\nScript execution completed.');
+            log('\nExecution finished.');
 
         } catch (error) {
             log(`Execution failed: ${error.message}`);
