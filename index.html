@@ -110,18 +110,25 @@
         terminal.scrollTop = terminal.scrollHeight;
     }
 
-    // Capture uncaught errors and print them straight to the UI terminal box
     window.addEventListener('error', (e) => log(`[GLOBAL ERROR]: ${e.message}`));
     window.addEventListener('unhandledrejection', (e) => log(`[UNHANDLED REJECTION]: ${e.reason?.message || e.reason}`));
 
     let Adb, AdbDaemonWebUsbDeviceManager, AdbWebCredentialStore, DecodeUtf8Stream;
     let adbDevice = null;
 
+    // Unpacks ESM named or default exports robustly
+    function resolveExport(mod, name) {
+        if (!mod) return undefined;
+        if (mod[name]) return mod[name];
+        if (mod.default && mod.default[name]) return mod.default[name];
+        if (mod.default && typeof mod.default === 'function') return mod.default;
+        return undefined;
+    }
+
     async function init() {
         try {
             log('Loading WebADB standalone modules...', true);
             
-            // ESM bundle parameters force full dependency inlining
             const [adbMod, webusbMod, credMod, streamMod] = await Promise.all([
                 import('https://esm.sh/@yume-chan/adb?bundle'),
                 import('https://esm.sh/@yume-chan/adb-backend-webusb?bundle'),
@@ -129,10 +136,21 @@
                 import('https://esm.sh/@yume-chan/stream-extra?bundle')
             ]);
 
-            Adb = adbMod.Adb;
-            AdbDaemonWebUsbDeviceManager = webusbMod.AdbDaemonWebUsbDeviceManager;
-            AdbWebCredentialStore = credMod.AdbWebCredentialStore;
-            DecodeUtf8Stream = streamMod.DecodeUtf8Stream;
+            Adb = resolveExport(adbMod, 'Adb');
+            AdbDaemonWebUsbDeviceManager = resolveExport(webusbMod, 'AdbDaemonWebUsbDeviceManager');
+            AdbWebCredentialStore = resolveExport(credMod, 'AdbWebCredentialStore');
+            DecodeUtf8Stream = resolveExport(streamMod, 'DecodeUtf8Stream');
+
+            // Explicit verification step
+            const missing = [];
+            if (!Adb) missing.push('Adb');
+            if (!AdbDaemonWebUsbDeviceManager) missing.push('AdbDaemonWebUsbDeviceManager');
+            if (!AdbWebCredentialStore) missing.push('AdbWebCredentialStore');
+            if (!DecodeUtf8Stream) missing.push('DecodeUtf8Stream');
+
+            if (missing.length > 0) {
+                throw new Error(`Failed to extract properties: ${missing.join(', ')}`);
+            }
 
             log('Modules loaded successfully!\nClick "Connect Phone" to begin.', true);
         } catch (err) {
@@ -144,7 +162,7 @@
 
     connectBtn.addEventListener('click', async () => {
         if (!AdbDaemonWebUsbDeviceManager) {
-            log('[ERROR] WebADB modules are not ready.');
+            log('[ERROR] WebADB modules failed to initialize properly.');
             return;
         }
 
@@ -153,7 +171,7 @@
             const Manager = AdbDaemonWebUsbDeviceManager.BROWSER;
             
             if (!Manager) {
-                log('[ERROR] WebUSB unavailable. Ensure you are using Chrome/Brave/Edge on HTTPS or localhost.');
+                log('[ERROR] WebUSB unavailable. Ensure you are using Chrome/Brave/Edge on HTTPS.');
                 return;
             }
 
@@ -163,7 +181,7 @@
                 return;
             }
 
-            log(`Connecting to ${device.name || 'USB Device'}...`);
+            log(`Connecting to device...`);
             const connection = await device.connect();
             const credentialStore = new AdbWebCredentialStore('shizeasy');
             
