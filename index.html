@@ -33,6 +33,9 @@
             margin-bottom: 16px;
             color: #2d3748;
         }
+        #statusText {
+            font-weight: normal;
+        }
         .controls {
             display: flex;
             gap: 12px;
@@ -95,14 +98,21 @@
     </div>
 
     <div class="logs-title">Logs:</div>
-    <div class="terminal" id="terminal">Initializing...</div>
+    <div class="terminal" id="terminal">Click "Connect Phone" to begin...</div>
 </div>
 
 <script type="module">
+    // Static imports loaded directly by browser native ES Module engine
+    import { Adb } from 'https://cdn.jsdelivr.net/npm/@yume-chan/adb@0.0.22/+esm';
+    import { AdbDaemonWebUsbDeviceManager } from 'https://cdn.jsdelivr.net/npm/@yume-chan/adb-backend-webusb@0.0.22/+esm';
+    import { AdbWebCredentialStore } from 'https://cdn.jsdelivr.net/npm/@yume-chan/adb-credential-web@0.0.22/+esm';
+
     const connectBtn = document.getElementById('connectBtn');
     const startBtn = document.getElementById('startBtn');
     const statusText = document.getElementById('statusText');
     const terminal = document.getElementById('terminal');
+
+    let adbDevice = null;
 
     function log(message, clear = false) {
         if (clear) terminal.textContent = '';
@@ -110,107 +120,57 @@
         terminal.scrollTop = terminal.scrollHeight;
     }
 
-    window.addEventListener('error', (e) => log(`[GLOBAL ERROR]: ${e.message}`));
-    window.addEventListener('unhandledrejection', (e) => log(`[UNHANDLED REJECTION]: ${e.reason?.message || e.reason}`));
+    window.addEventListener('error', (e) => log(`[ERROR]: ${e.message}`));
+    window.addEventListener('unhandledrejection', (e) => log(`[REJECTION]: ${e.reason?.message || e.reason}`));
 
-    let Adb, DeviceManager, AdbWebCredentialStore, DeviceBackend;
-    let adbDevice = null;
-
-    // ADB Interface Specification (Class 0xFF, Subclass 0x42, Protocol 0x01)
-    const ADB_USB_FILTER = { classCode: 0xff, subclassCode: 0x42, protocolCode: 0x01 };
-
-    function findExport(mod, ...names) {
-        if (!mod) return null;
-        const scopes = [mod, mod.default].filter(Boolean);
-        for (const scope of scopes) {
-            for (const name of names) {
-                if (scope[name]) return scope[name];
-            }
-        }
-        return typeof mod.default === 'function' ? mod.default : null;
-    }
-
-    async function readStream(stream, prefix = '') {
+    async function streamToTerminal(stream, prefix = '') {
         if (!stream) return;
-        const decoder = new TextDecoder();
         const reader = stream.getReader();
+        const decoder = new TextDecoder();
         try {
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) break;
                 log(prefix + decoder.decode(value, { stream: true }));
             }
-        } catch (e) {
-            log(`[STREAM ERROR]: ${e.message}`);
+        } catch (err) {
+            log(`[STREAM ERROR]: ${err.message}`);
         } finally {
             reader.releaseLock();
         }
     }
 
-    async function init() {
-        try {
-            log('Loading WebADB modules...', true);
-            const [adbMod, webusbMod, credMod] = await Promise.all([
-                import('https://jspm.dev/@yume-chan/adb'),
-                import('https://jspm.dev/@yume-chan/adb-backend-webusb'),
-                import('https://jspm.dev/@yume-chan/adb-credential-web')
-            ]);
-
-            Adb = findExport(adbMod, 'Adb');
-            DeviceManager = findExport(webusbMod, 'AdbDaemonWebUsbDeviceManager', 'AdbWebUsbBackendManager');
-            DeviceBackend = findExport(webusbMod, 'AdbDaemonWebUsbDevice', 'AdbWebUsbBackend');
-            AdbWebCredentialStore = findExport(credMod, 'AdbWebCredentialStore');
-
-            log(`Modules loaded successfully!\nClick "Connect Phone" to begin.`, true);
-        } catch (err) {
-            log(`[LOAD FAILED]: ${err.message}`, true);
-        }
-    }
-
-    init();
-
     connectBtn.addEventListener('click', async () => {
         try {
-            log('Requesting ADB USB device...', true);
+            log('Requesting WebUSB device pairing...', true);
+            const manager = AdbDaemonWebUsbDeviceManager.BROWSER;
 
-            let rawDevice;
-            // Force browser to open strictly the ADB interface filter (Subclass 0x42)
-            if (navigator.usb) {
-                rawDevice = await navigator.usb.requestDevice({ filters: [ADB_USB_FILTER] });
-            } else {
-                throw new Error('WebUSB API not available in this browser environment.');
-            }
-
-            if (!rawDevice) {
-                log('Device selection canceled.');
+            if (!manager) {
+                log('[ERROR] WebUSB is not supported in this browser environment.');
                 return;
             }
 
-            log(`Connecting to ${rawDevice.productName || 'Android Device'}...`);
-            
-            let backend;
-            if (DeviceBackend) {
-                backend = new DeviceBackend(rawDevice);
-            } else if (DeviceManager?.BROWSER) {
-                backend = await DeviceManager.BROWSER.connect(rawDevice);
-            } else {
-                throw new Error('WebUSB Backend constructor unavailable.');
+            const device = await manager.requestDevice();
+            if (!device) {
+                log('Device pairing canceled.');
+                return;
             }
 
-            const connection = await backend.connect();
+            log(`Connecting to USB device...`);
+            const connection = await device.connect();
             const credentialStore = new AdbWebCredentialStore('shizeasy');
-            
+
             log('Check phone screen and tap "Always allow from this computer"...');
             adbDevice = await Adb.authenticate(connection, credentialStore, undefined);
-            
+
             statusText.textContent = 'Connected';
             statusText.style.color = '#10b981';
             connectBtn.style.display = 'none';
-            
+
             startBtn.disabled = false;
             startBtn.classList.add('enabled');
-            
-            log('Connected! Click "Start Shizuku" to run the script.');
+
+            log('Connected successfully!\nClick "Start Shizuku" to execute script.');
 
         } catch (error) {
             log(`Connection failed: ${error.message}`);
@@ -223,16 +183,14 @@
         try {
             log('\nExecuting Shizuku start command...');
             startBtn.disabled = true;
-            
+
             const command = 'sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh';
-            let subprocess = await adbDevice.subprocess.spawn(command);
+            const process = await adbDevice.subprocess.spawn(command);
 
-            if (subprocess.stdout) readStream(subprocess.stdout, '');
-            if (subprocess.stderr) readStream(subprocess.stderr, '[ERROR]: ');
+            if (process.stdout) streamToTerminal(process.stdout, '');
+            if (process.stderr) streamToTerminal(process.stderr, '[ERROR]: ');
 
-            if (subprocess.exit) {
-                await subprocess.exit;
-            }
+            await process.exit;
             log('\nExecution finished.');
 
         } catch (error) {
